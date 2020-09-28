@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 class kShapeStream:
     
     # Initialize
+    # Create a kShapeStream object with a certain number
+    # of clusters. 
     def __init__(self, k, m):
         # Number of clusters
         self.k = k;
@@ -184,7 +186,7 @@ class kShapeStream:
     
     # Inputs
     # X - nxm. n = number of data points, m = Number of time points
-    def _kshape(self, X, weights=None):
+    def _kshape(self, X, weights=None, verbose=True):
         # Check time points of new data
         m = X.shape[1]
         if m != self.m:
@@ -201,10 +203,14 @@ class kShapeStream:
             old_idx = idx
             for j in range(self.k):
                 centroids[j] = self.extract_shape(idx, X, j, centroids[j, :], self.S[j, :], weights)
-
+            # distances has dimensions n x k
             distances = (1 - self.ncc_c_3dim(X, centroids).max(axis=2)).T
-
+            
             idx = distances.argmin(1)
+            if verbose:
+            # How many indices changed?
+                print('Change in clusters', np.sum(old_idx != idx)); 
+                
             if np.array_equal(old_idx, idx):
                 break
 
@@ -221,6 +227,81 @@ class kShapeStream:
                     series.append(j)
             clusters.append((centroid, series))
         return clusters
+    
+    #######################
+    # Probablistic kShape
+    #######################
+    
+    def kshape_prob(self, X, weights=None):
+        idx, centroids = self._kshape_prob(np.array(X), weights=weights)
+        clusters = []; 
+        for i, centroid in enumerate(centroids):
+            series = []; 
+            for j, val in enumerate(idx):
+                if i == val:
+                    series.append(j)
+            clusters.append((centroid, series))
+        return clusters
+    
+    # Inputs
+    # X - nxm. n = number of data points, m = Number of time points
+    def _kshape_prob(self, X, weights=None, verbose=True):
+        # Check time points of new data
+        m = X.shape[1]
+        if m != self.m:
+            raise Exception('Time points mismatch:', m, self.m);
+        
+        n = X.shape[0]; 
+        if weights is None:
+            weights = np.ones(n); 
+        # Initialize cluster memberships
+        idx = self.init_idx(X);
+        # Copy current centroids
+        centroids = self.centers.copy(); 
+        # Initialize cluster distance means
+        means = np.zeros(self.k); 
+        # Initialize cluster distance variances
+        sigs = np.ones(self.k); 
+        # Initialize distances to clusters
+        distances = np.empty((n, self.k))
+        
+        n_it = 100; 
+        mean_evolution = np.zeros((self.k, n_it)); 
+        sigs_evolution = np.zeros((self.k, n_it)); 
+        for it in range(n_it):
+            old_idx = idx
+            for j in range(self.k):
+                centroids[j] = self.extract_shape(idx, X, j, centroids[j, :], self.S[j, :], weights)
+            # distances has dimensions n x k
+            distances = (1 - self.ncc_c_3dim(X, centroids).max(axis=2)).T
+            
+            # Get updated means and std deviations of cluster distances
+            means, sigs = self.update_cluster_stats(idx, means, sigs, distances); 
+            # Record means and std deviations of clusters
+            mean_evolution[:, it] = means; 
+            sigs_evolution[:, it] = sigs; 
+            
+            # Compute probability of each cluster membership & assign to most likely cluster
+            idx = self.prob_idx(means, sigs, distances); 
+            #idx = distances.argmin(1)
+            
+            
+            if verbose:
+            # How many indices changed?
+                print('Cluster means', means); 
+                print('Cluster Std Dev', sigs); 
+                #print('Change in clusters', np.sum(old_idx != idx)); 
+                #print('Number of outliers', np.sum(idx == self.k)); 
+                #print('Indices', idx); 
+                
+            if np.array_equal(old_idx, idx):
+                mean_evolution = mean_evolution[:, 0:it+1]; 
+                sigs_evolution = sigs_evolution[:, 0:it+1]; 
+                break
+
+        return idx, centroids, mean_evolution, sigs_evolution
+    
+    #####################################################################
     
     # Updates the clusters of this object with new data. 
     def _update_clusters(self, clusters, X, weights=None):
@@ -281,10 +362,58 @@ class kShapeStream:
             var = (1.0/self.counts[i])*np.diagonal(self.S[i, :, :]) - mu**2; 
         return mu, np.abs(var)
     
+    def dist_outliers(self, distances, idxs, thresh=2):
+    # distances - n x k array of distances between each data point and centroid
+    # idxs - n array of cluster label for each data point
+        n = np.size(idxs); 
+        new_idxs = idxs.copy(); 
+        # Iterate through clusters
+        for i in range(self.k):
+            # Get distance statistics for this cluster
+            disti = distances[idxs==i, :]; 
+            mu = np.mean(disti); sig = np.sqrt(np.var(disti)); 
+            # Iterate through data points
+            for j in range(n): 
+                if idxs[j]==i:
+                    if np.abs(distances[j, i]-mu) > thresh*sig:
+                        # This is an outlier
+                        new_idxs[j] = self.k;
+        return new_idxs
     
-    def ncc_prob_3dim(self, X, y):
-        return 0
+    def prob_idx(self, means, sigs, distances, thresh=2): 
+    # Inputs
+    # means - k array of mean distances of each cluster
+    # sigs - k array of std. dev. of distances of each cluster
+    # distances - n x k array of distances between each data point and cluster
+    # Outputs
+    # idxs - n array containing values 0 to k indicating cluster
+    # membership (0-(k-1)) or outlier (k). 
+        n = np.shape(distances)[0]; 
+        # Get the standard deviation for all distances
+        sig_dist = np.abs(distances-means)/sigs; 
+        print('Sigma distances', sig_dist); 
+        # Initialize cluster membership array
+        idxs = np.zeros(n); 
+        for i in range(n):
+            # Find the maximum likelihood cluster
+            min_dist = np.argmin(sig_dist[i, :]); 
+            if sig_dist[i, min_dist] > thresh: 
+                idxs[i] = self.k; 
+                print('Outlier', i, 'with distances: ', sig_dist[i, :], 'mindist', min_dist, 'thresh', thresh); 
+            else:
+                idxs[i] = min_dist; 
+        return idxs; 
     
+    def update_cluster_stats(self, idxs, means, sigs, distances):
+        means = np.zeros(self.k); sigs = np.ones(self.k); 
+        for i in range(self.k):
+            n_i = np.sum(idxs==i); 
+            if n_i>0:
+                dists_i = distances[idxs==i, i]; 
+                weight = n_i/(1+n_i); 
+                means[i] = np.mean(dists_i); sigs[i] = weight*np.sqrt(np.var(dists_i)) + (1-weight)*1; 
+        return means, sigs 
+        
     ###############################################################################
     # VISUALIZATION METHODS
     ###############################################################################
