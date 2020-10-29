@@ -382,7 +382,7 @@ class kShapeProbStream(kShapeStream):
                     series.append(j)
             clusters.append((centroid, series))
         # Append outliers at the end
-        outliers = idx[idx==self.k]
+        outliers = np.where(idx==self.k)
         clusters.append(outliers); 
         return clusters
     
@@ -416,6 +416,7 @@ class kShapeProbStream(kShapeStream):
         centroids = self.centers.copy(); 
         
         for it in range(100):
+            print('Iteration ', it, '=========================================================='); 
             old_idx = idx
             # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             # 2. Shape Extraction
@@ -428,6 +429,7 @@ class kShapeProbStream(kShapeStream):
             distances = (1 - ncc_c_3dim(X, centroids).max(axis=2)).T
             # Update means and std deviations of cluster distances
             means, sigs, dists2 = self.update_cluster_stats(idx, distances); 
+ 
             # Assign to most likely clusters
             idx = self.prob_idx(means, sigs, distances); 
             # If no change in assignment, return
@@ -466,14 +468,29 @@ class kShapeProbStream(kShapeStream):
             X = in_data; 
         
         # Add new centroids/data to existing clusters
-        clusters = self.kshape(X, weights=weights); 
-        self._update_clusters(clusters, X, weights=weights); 
+        print('***************** Calling kshape ************************'); 
+        idxs, centroids = self._kshape(np.array(X), weights=weights)  
+        print('***************** Updating clusters ************************'); 
+        self._update_clusters(idxs, centroids, X, weights=weights); 
+        
+        # Package into clusters
+        clusters = []; 
+        for i, centroid in enumerate(centroids):
+            series = []; 
+            for j, val in enumerate(idxs):
+                if i == val:
+                    series.append(j)
+            clusters.append((centroid, series))
+            
+        # Append outliers at the end
+        outliers = np.where(idxs==self.k)
+        clusters.append(outliers); 
         
         # Don't randomly initialize next batch
         self.init_random = False;
         return clusters
     
-    def _update_clusters(self, clusters, X, weights=None):
+    def _update_clusters(self, idxs, centroids, X, weights=None):
         n = X.shape[0];
         
         # If no weights, are given, we assume no weighting
@@ -481,29 +498,29 @@ class kShapeProbStream(kShapeStream):
             weights = np.ones(n); 
         else:
             weights = np.array(weights); 
+        
+        # Update cluster statistcs
+        # Get distances of X to centroids
+        distances = (1 - ncc_c_3dim(X, centroids).max(axis=2)).T
+        # Update cluster statistics
+        means, sigs, dists2 = self.update_cluster_stats(idxs, distances)
+        self.means = means; self.sigs = sigs; self.dists2 = dists2; 
             
-        # Iteratively update clusters
+        # Iteratively update cluster shape matrices
         for i in range(self.k):
-            centroid = clusters[i][0]; 
-            idxs = clusters[i][1];
-            
+            centroid = centroids[i, :]; 
             # Update centroid
             self.centers[i, :] = centroid
-            # Get distances of X to centroids
-            distances = (1 - ncc_c_3dim(X, np.expand_dims(centroid, axis=1)).max(axis=2)).T
-            # Update cluster statistics
-            means, sigs, dists2 = self.update_cluster_stats(idxs, distances)
-            self.means = means; self.sigs = sigs; self.dists2 = dists2; 
             # Update shape matrix
-            Xi = X[idxs, :] * weights[idxs, np.newaxis]; 
+            Xi = X[idxs==i, :] * weights[idxs==i, np.newaxis]; 
             self.S[i, :, :] = self.S[i, :, :] + np.dot(Xi.transpose(), Xi)
             # Update cluster counts
-            self.counts[i] += np.sum(weights[idxs]); 
+            self.counts[i] += np.sum(weights[idxs==i]); 
         
     # ----------------------------------------------------
     # PROBABILITY DISTANCES
     
-    def prob_idx(self, means, sigs, distances, thresh=1.5): 
+    def prob_idx(self, means, sigs, distances, thresh=2): 
     # means - [k] array of mean dist to center in each cluster
     # sigs - [k] array of std. dev. of dist to center
     # distances - n x k array of dists between each data point and cluster
@@ -514,7 +531,7 @@ class kShapeProbStream(kShapeStream):
         
         # Convert distances to number of std devs from mean
         sig_dist = np.abs(distances-means)/sigs; 
-        print(sig_dist)
+        #### print(sig_dist)
         # Initialize cluster membership array
         idxs = np.zeros(n); 
         for i in range(n):
@@ -533,6 +550,7 @@ class kShapeProbStream(kShapeStream):
         # Start with previous means / variances / dist2 of clusters
         means = self.means.copy(); sigs = self.sigs.copy(); dists2 = self.dists2.copy(); 
         # Iterate through clusters and update stats
+        print('Previous means', means); print('Previous sigs', sigs); 
         for i in range(self.k):
             # Find total number of points in the cluster
             nprev = self.counts[i]; ncur = np.sum(idxs==i); 
@@ -549,6 +567,8 @@ class kShapeProbStream(kShapeStream):
                 sig = np.sqrt(dists2[i]-means[i]**2)
                 weight = ntot / (1 + ntot); 
                 sigs[i] = weight*sig + (1-weight)*1; 
+        print('---------------------------------------')        
+        print('New means', means); print('New sigs', sigs); 
         return means, sigs , dists2
     
     # ----------------------------------------------------
@@ -572,8 +592,10 @@ class kShapeProbStream(kShapeStream):
             plt.title("Members : %d" % (self.counts[i]), fontsize=20)
         # Plot outlier
         plt.subplot(rows, cols, self.k+1);
-        els = clusters[self.k]
+        els = clusters[self.k][0]
+        print('OUTLIERS'); 
+        print(els); 
         if len(els) != 0:
             for j in els:
-                plt.plot(X[j, :], linewidth=3); 
+                plt.plot(X[j, :].T, linewidth=3); 
         plt.title("Outliers : %d" % len(els), fontsize=20); 
