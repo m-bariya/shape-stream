@@ -125,6 +125,11 @@ class kShapeStream:
         self.S = np.zeros([k, m, m]); 
         # Whether to initialize cluster membership
         self.init_random = True; 
+        
+        # Recorder - Shows evolution of clusters over iterations
+        self.record = False; 
+        self.recorder = {"centroids" : np.zeros([k, m, 1]), "counts" : np.zeros([k, 1])}
+        
     
     # Initialize cluster membership for timeseries in X
     # X - [n x m]
@@ -139,6 +144,19 @@ class kShapeStream:
             idx = distances.argmin(1)
         return idx
     
+    def reset_record(self):
+        self.recorder = {"centroids" : np.zeros([self.k, self.m, 1]), "counts" : np.zeros([self.k, 1])}
+        
+    def update_record(self, dict_vals):
+        for key, val in dict_vals.items():
+            self.recorder[key] = np.concatenate([self.recorder[key], val[..., np.newaxis]], axis=-1);
+     
+    def get_counts(self, idx):
+        counts = np.zeros(self.k); 
+        for i in range(self.k):
+            counts[i] = np.sum(idx==i); 
+        return counts
+            
     #-----------------------------------------------------------------
     # Shape extraction methods
     
@@ -265,6 +283,11 @@ class kShapeStream:
             # distances has dimensions n x k
             distances = (1 - ncc_c_3dim(X, centroids).max(axis=2)).T
             idx = distances.argmin(1)
+            
+            # Record 
+            if self.record:
+                counts = self.get_counts(idx); 
+                self.update_record({"centroids" : centroids, "counts" : counts}); 
                 
             # If no change in assignment, return
             if np.array_equal(old_idx, idx):
@@ -368,6 +391,18 @@ class kShapeProbStream(kShapeStream):
         self.means = np.zeros(k); 
         self.sigs = np.ones(k); 
         self.dists2 = np.ones(k);
+        
+        # Threshold for outliers (number of std. deviations)
+        self.thresh = 2; 
+        
+        # Recorder
+        self.recorder["means"] = np.zeros([k, 1]); 
+        self.recorder["sigs"] = np.zeros([k, 1]); 
+        
+    def reset_record(self):
+        self.recorder = {"centroids" : np.zeros([self.k, self.m, 1]), "counts" : np.zeros([self.k, 1])}
+        self.recorder["means"] = np.zeros([k, 1]); 
+        self.recorder["sigs"] = np.zeros([k, 1]);
     
     # Clustering wrapper function
     # X - matrix of timeseries data to cluster
@@ -416,7 +451,6 @@ class kShapeProbStream(kShapeStream):
         centroids = self.centers.copy(); 
         
         for it in range(100):
-            print('Iteration ', it, '=========================================================='); 
             old_idx = idx
             # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             # 2. Shape Extraction
@@ -432,10 +466,16 @@ class kShapeProbStream(kShapeStream):
  
             # Assign to most likely clusters
             idx = self.prob_idx(means, sigs, distances); 
+        
+            # Record
+            if self.record:
+                counts = self.get_counts(idx);  
+                self.update_record({"centroids" : centroids, "counts" : counts, "means" : means, "sigs" : sigs}); 
+                
             # If no change in assignment, return
             if np.array_equal(old_idx, idx): 
                 break
-
+        
         return idx, centroids
     
     
@@ -468,9 +508,7 @@ class kShapeProbStream(kShapeStream):
             X = in_data; 
         
         # Add new centroids/data to existing clusters
-        print('***************** Calling kshape ************************'); 
         idxs, centroids = self._kshape(np.array(X), weights=weights)  
-        print('***************** Updating clusters ************************'); 
         self._update_clusters(idxs, centroids, X, weights=weights); 
         
         # Package into clusters
@@ -520,7 +558,7 @@ class kShapeProbStream(kShapeStream):
     # ----------------------------------------------------
     # PROBABILITY DISTANCES
     
-    def prob_idx(self, means, sigs, distances, thresh=2): 
+    def prob_idx(self, means, sigs, distances): 
     # means - [k] array of mean dist to center in each cluster
     # sigs - [k] array of std. dev. of dist to center
     # distances - n x k array of dists between each data point and cluster
@@ -537,11 +575,10 @@ class kShapeProbStream(kShapeStream):
         for i in range(n):
             # Find the maximum likelihood cluster
             min_dist = np.argmin(sig_dist[i, :]); 
-            if sig_dist[i, min_dist] < thresh: 
+            if sig_dist[i, min_dist] < self.thresh: 
                 idxs[i] = min_dist
             else:
                 # Outlier
-                print('OUTLIER'); 
                 idxs[i] = self.k; 
         return idxs; 
     
@@ -550,7 +587,6 @@ class kShapeProbStream(kShapeStream):
         # Start with previous means / variances / dist2 of clusters
         means = self.means.copy(); sigs = self.sigs.copy(); dists2 = self.dists2.copy(); 
         # Iterate through clusters and update stats
-        print('Previous means', means); print('Previous sigs', sigs); 
         for i in range(self.k):
             # Find total number of points in the cluster
             nprev = self.counts[i]; ncur = np.sum(idxs==i); 
@@ -567,8 +603,6 @@ class kShapeProbStream(kShapeStream):
                 sig = np.sqrt(dists2[i]-means[i]**2)
                 weight = ntot / (1 + ntot); 
                 sigs[i] = weight*sig + (1-weight)*1; 
-        print('---------------------------------------')        
-        print('New means', means); print('New sigs', sigs); 
         return means, sigs , dists2
     
     # ----------------------------------------------------
@@ -593,8 +627,6 @@ class kShapeProbStream(kShapeStream):
         # Plot outlier
         plt.subplot(rows, cols, self.k+1);
         els = clusters[self.k][0]
-        print('OUTLIERS'); 
-        print(els); 
         if len(els) != 0:
             for j in els:
                 plt.plot(X[j, :].T, linewidth=3); 
