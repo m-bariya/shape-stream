@@ -457,6 +457,8 @@ class kShapeStream:
 kShapeProbStream: A probablistic version of kShapeStream. 
 Distances between data points are the sbd. Points assigned to most likely cluster, with outliers separated. 
 """
+##################################################################################################################
+##################################################################################################################
 
 class kShapeProbStream(kShapeStream):
     def __init__(self, k, m):
