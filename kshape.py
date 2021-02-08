@@ -158,7 +158,9 @@ class kShapeStream:
         self.ps['member_size'] = 2
         self.ps['centroid_colors'] = pl.cm.jet(np.linspace(0, 1, self.k))
         self.ps['show_x'] = False; self.ps['show_y'] = False
-        self.ps['count_size'] = 16;
+        self.ps['count_size'] = 16
+        self.ps['label_color'] = 'lightgray'
+        self.ps['label_alpha'] = 0.5
 
 
     def init_idx(self, X):
@@ -441,9 +443,10 @@ class kShapeStream:
             ax.plot(centroid, color=colors[i], linewidth=5)
             # Formatting the plot
             # Number of points in cluster
-            ax.text(0.9, 0.9, str(self.counts[i]), horizontalalignment='center',
+            ax.text(0.9, 0.9, str(int(self.counts[i])), horizontalalignment='center',
                     verticalalignment='center',
-                    transform=ax.transAxes, fontsize=self.ps['count_size'])
+                    transform=ax.transAxes, fontsize=self.ps['count_size'],
+                    bbox={'facecolor': self.ps['label_color'], 'alpha': self.ps['label_alpha'], 'pad': 3})
             # Remove ticks
             if not self.ps['show_x']:
                 ax.get_xaxis().set_ticks([])
@@ -738,7 +741,8 @@ class kShapeProbStream(kShapeStream):
             # Number of points in cluster
             ax.text(0.9, 0.9, str(int(self.counts[i])), horizontalalignment='center',
                     verticalalignment='center',
-                    transform=ax.transAxes, fontsize=self.ps['count_size'])
+                    transform=ax.transAxes, fontsize=self.ps['count_size'],
+                    bbox={'facecolor': self.ps['label_color'], 'alpha': self.ps['label_alpha'], 'pad': 3})
             # Remove ticks
             if not self.ps['show_x']:
                 ax.get_xaxis().set_ticks([])
@@ -769,4 +773,5 @@ class kShapeProbStream(kShapeStream):
             # Number of outliers
             ax.text(0.9, 0.9, '+' + str(int(len(els))), horizontalalignment='center',
                     verticalalignment='center',
-                    transform=ax.transAxes, fontsize=self.ps['count_size'])
+                    transform=ax.transAxes, fontsize=self.ps['count_size'],
+                    bbox={'facecolor': self.ps['label_color'], 'alpha': self.ps['label_alpha'], 'pad': 3})
